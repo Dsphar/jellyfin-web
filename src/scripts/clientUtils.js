@@ -1,35 +1,49 @@
+import * as webSettings from 'webSettings';
 
 export function getCurrentUser() {
     return window.ApiClient.getCurrentUser(false);
 }
 
-//TODO: investigate url prefix support for serverAddress function
-export function serverAddress() {
-    if (AppInfo.isNativeApp) {
-        const apiClient = window.ApiClient;
+// TODO: investigate url prefix support for serverAddress function
+export async function serverAddress() {
+    const apiClient = window.ApiClient;
 
-        if (apiClient) {
-            return apiClient.serverAddress();
+    if (apiClient) {
+        return Promise.resolve(apiClient.serverAddress());
+    }
+
+    const current = await window.connectionManager.getAvailableServers().then(servers => {
+        if (servers.length !== 0) {
+            return Promise.resolve(servers[0].ManualAddress);
         }
+    });
 
-        return null;
-    }
+    // TODO this makes things faster but it also blocks the wizard in some scenarios
+    // if (current) return Promise.resolve(current);
 
-    const urlLower = window.location.href.toLowerCase();
-    const index = urlLower.lastIndexOf('/web');
+    const urls = [];
+    urls.push(window.location.origin);
+    urls.push(`https://${window.location.hostname}:8920`);
+    urls.push(`http://${window.location.hostname}:8096`);
+    urls.push(...await webSettings.getServers());
 
-    if (index != -1) {
-        return urlLower.substring(0, index);
-    }
+    const promises = urls.map(url => {
+        return fetch(`${url}/System/Info/Public`).catch(error => {
+            return Promise.resolve();
+        });
+    });
 
-    const loc = window.location;
-    let address = loc.protocol + '//' + loc.hostname;
-
-    if (loc.port) {
-        address += ':' + loc.port;
-    }
-
-    return address;
+    return Promise.all(promises).then(responses => {
+        responses = responses.filter(response => response && response.ok);
+        return Promise.all(responses.map(response => response.json()));
+    }).then(configs => {
+        let selection = configs.find(config => !config.StartupWizardCompleted);
+        if (!selection) selection = configs[0];
+        return Promise.resolve(selection.LocalAddress);
+    }).catch(error => {
+        console.log(error);
+        return Promise.resolve();
+    });
 }
 
 export function getCurrentUserId() {
@@ -49,16 +63,9 @@ export function onServerChanged(userId, accessToken, apiClient) {
 
 export function logout() {
     window.connectionManager.logout().then(function () {
-        let loginPage;
-
-        if (AppInfo.isNativeApp) {
-            loginPage = 'selectserver.html';
-            window.ApiClient = null;
-        } else {
-            loginPage = 'login.html';
-        }
-
-        navigate(loginPage);
+        webSettings.getMultiServer().then(multi => {
+            multi ? navigate('selectserver.html') : navigate('login.html');
+        });
     });
 }
 
